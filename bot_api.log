@@ -34,3 +34,38 @@
 2025-08-18 23:36:57,750 INFO Polling statuses...
 2025-08-18 23:36:58,245 INFO API POST https://tms.termt.com/api/v1/project/29/unit/full -> 200
 2025-08-18 23:36:58,247 INFO No changes in summary; skip sending.
+2025-08-18 23:37:57,749 INFO Polling statuses...
+2025-08-18 23:37:58,234 INFO API POST https://tms.termt.com/api/v1/project/29/unit/full -> 200
+2025-08-18 23:37:58,236 INFO No changes in summary; skip sending.
+2025-08-18 23:38:57,750 INFO Polling statuses...
+2025-08-18 23:38:58,244 INFO API POST https://tms.termt.com/api/v1/project/29/unit/full -> 200
+2025-08-18 23:38:58,246 INFO No changes in summary; skip sending.
+2025-08-18 23:39:57,750 INFO Polling statuses...
+2025-08-18 23:39:58,237 INFO API POST https://tms.termt.com/api/v1/project/29/unit/full -> 200
+2025-08-18 23:39:58,238 INFO No changes in summary; skip sending.
+2025-08-18 23:40:10,590 INFO Polling statuses...
+2025-08-18 23:40:11,071 INFO API POST https://tms.termt.com/api/v1/project/29/unit/full -> 200
+2025-08-18 23:40:11,075 INFO No changes in summary; skip sending.
+2025-08-18 23:40:57,761 INFO Polling statuses...
+2025-08-18 23:40:58,244 INFO API POST https://tms.termt.com/api/v1/project/29/unit/full -> 200
+2025-08-18 23:40:58,245 INFO No changes in summary; skip sending.
+2025-08-19 00:44:14,695 INFO __main__: Starting bot...
+2025-08-19 00:47:35,404 INFO __main__: Starting bot...
+2025-08-19 00:47:35,453 INFO apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-08-19 00:49:31,143 INFO __main__: Starting bot...
+2025-08-19 00:49:31,181 INFO apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-08-19 00:49:31,181 INFO apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-08-19 00:49:31,181 INFO __main__: Daily revenue stub scheduled at 01:00 Asia/Novosibirsk (first in 628 sec)
+2025-08-19 00:49:31,600 INFO httpx: HTTP Request: POST https://api.telegram.org/bot7562536155:AAHvFTYQavP6tTwGNm4xD7A8NjYWQvWScoo/getMe "HTTP/1.1 200 OK"
+2025-08-19 00:49:31,704 INFO httpx: HTTP Request: POST https://api.telegram.org/bot7562536155:AAHvFTYQavP6tTwGNm4xD7A8NjYWQvWScoo/deleteWebhook "HTTP/1.1 200 OK"
+2025-08-19 00:49:31,706 INFO apscheduler.scheduler: Added job "poll_statuses" to job store "default"
+2025-08-19 00:49:31,707 INFO apscheduler.scheduler: Added job "daily_revenue_stub" to job store "default"
+2025-08-19 00:49:31,707 INFO apscheduler.scheduler: Scheduler started
+2025-08-19 00:49:31,707 INFO telegram.ext.Application: Application started
+2025-08-19 00:49:32,023 INFO httpx: HTTP Request: POST https://api.telegram.org/bot7562536155:AAHvFTYQavP6tTwGNm4xD7A8NjYWQvWScoo/getUpdates "HTTP/1.1 200 OK"
+2025-08-19 00:49:32,164 INFO httpx: HTTP Request: POST https://api.telegram.org/bot7562536155:AAHvFTYQavP6tTwGNm4xD7A8NjYWQvWScoo/sendMessage "HTTP/1.1 200 OK"
+2025-08-19 00:49:32,725 INFO httpx: HTTP Request: POST https://tms.termt.com/api/v1/project/29/unit/full "HTTP/1.1 200 OK"
+2025-08-19 00:49:32,729 INFO app.services.tms_client: TMS https://tms.termt.com/api/v1/project/29/unit/full -> 200
+2025-08-19 00:49:32,853 INFO httpx: HTTP Request: POST https://api.telegram.org/bot7562536155:AAHvFTYQavP6tTwGNm4xD7A8NjYWQvWScoo/sendMessage "HTTP/1.1 200 OK"
+2025-08-19 00:49:42,125 INFO httpx: HTTP Request: POST https://api.telegram.org/bot7562536155:AAHvFTYQavP6tTwGNm4xD7A8NjYWQvWScoo/getUpdates "HTTP/1.1 200 OK"
+2025-08-19 00:49:52,232 INFO httpx: HTTP Request: POST https://api.telegram.org/bot7562536155:AAHvFTYQavP6tTwGNm4xD7A8NjYWQvWScoo/getUpdates "HTTP/1.1 200 OK"
