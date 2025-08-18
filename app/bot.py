@@ -3,7 +3,7 @@ import json
 import logging
 from io import BytesIO
 from typing import Optional
-from datetime import time as dtime, datetime, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from telegram import Update, Bot
@@ -93,19 +93,11 @@ def _seconds_until_next(hour: int, minute: int, tz_name: str) -> int:
     now = datetime.now(tz)
     next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if next_run <= now:
+        from datetime import timedelta
         next_run += timedelta(days=1)
     return int((next_run - now).total_seconds())
 
-# ---------------- Handlers ----------------
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Бот запущен.\n"
-        "• Раз в минуту — статусы\n"
-        "• Раз в день (01:00) — сообщение о выручке (заглушка)\n"
-        "/status — сводка сейчас\n/whereami — chat_id"
-    )
-    await _poll_and_send(context)
-
+# ---------------- Handlers (оставим на всякий случай) ----------------
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _poll_and_send(context)
 
@@ -129,7 +121,7 @@ def main():
     app = Application.builder().token(cfg.bot_token).build()
     app.bot_data["cfg"] = cfg
 
-    app.add_handler(CommandHandler("start", cmd_start))
+    # команды не обязательны, но полезны для отладки
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("whereami", cmd_whereami))
     app.add_error_handler(on_error)
@@ -137,11 +129,15 @@ def main():
     if app.job_queue is None:
         raise RuntimeError("Установи extra: pip install 'python-telegram-bot[job-queue]'")
 
-    # статусы — каждую минуту
-    app.job_queue.run_repeating(_poll_and_send, interval=60, first=0, name="poll_statuses")
+    # 1) Опрос статусов: каждые 5 минут, первый запуск сразу (first=0) — БЕЗ /start
+    app.job_queue.run_repeating(
+        _poll_and_send,
+        interval=timedelta(minutes=5),
+        first=0,                     # отправит первую сводку сразу после запуска
+        name="poll_statuses",
+    )
 
-    # ежедневная «выручка» — эмулируем run_daily:
-    # первый старт = ближайшая 01:00 в нужной TZ, далее каждые 24 часа
+    # 2) Ежедневная «выручка» — ближайшая 01:00 в нужной TZ, далее каждые 24 часа
     if cfg.enable_daily_revenue:
         delay = _seconds_until_next(1, 0, cfg.timezone)
         app.job_queue.run_repeating(
