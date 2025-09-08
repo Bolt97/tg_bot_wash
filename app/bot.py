@@ -1,56 +1,27 @@
 from __future__ import annotations
 import json
 import logging
-from io import BytesIO
 from typing import Optional
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from telegram import Update, Bot
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from telegram.error import BadRequest, Forbidden
 
 from app.config import Config
 from app.logging_setup import setup_logging
 from app.formatters import format_washes, is_bad_wash
-from app.services.tms_client import TMSClient, redact_headers
+from app.services.tms_client import TMSClient
 
 logger = logging.getLogger(__name__)
 
-# Глобальные маркеры состояния
-_last_hash: Optional[str] = None
 _last_poll_ok_at: Optional[datetime] = None  # время последнего успешного опроса
 
-def _hash_text(s: str) -> str:
-    import hashlib
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()
-
-async def _send_debug(bot: Bot, chat_id: int, title: str, body: str):
-    """Отправка текста/файла в чат для дебага. Исключения не пробрасывает."""
-    if not chat_id:
-        return
-    MAX = 3800
-    try:
-        if len(body) <= MAX:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=f"🧪 {title}\n<pre>{body}</pre>",
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-        else:
-            bio = BytesIO(body.encode("utf-8"))
-            bio.name = f"{title.replace(' ', '_')}.txt"
-            await bot.send_document(chat_id=chat_id, document=bio, caption=f"🧪 {title}")
-    except (BadRequest, Forbidden) as e:
-        logger.warning("debug send failed to %s: %s", chat_id, e)
-    except Exception as e:
-        logger.exception("unexpected debug send error: %s", e)
 
 # ---------------- Статусы ----------------
 async def _poll_and_send(context: ContextTypes.DEFAULT_TYPE):
-    """Опрос статусов и отправка сводки. RAW-ответ — только при наличии проблем."""
-    global _last_hash, _last_poll_ok_at
+    """Опрос статусов. Сообщение в чат — только если есть проблемные мойки."""
+    global _last_poll_ok_at
     cfg: Config = context.application.bot_data["cfg"]
 
     logger.info("Polling statuses...")
@@ -64,34 +35,22 @@ async def _poll_and_send(context: ContextTypes.DEFAULT_TYPE):
 
     try:
         async with TMSClient(cfg.tms_base_url, cfg.tms_cookie) as tms:
-            data, raw, status_code, resp_h, req_h = await tms.fetch_units(cfg.tms_project_id, cfg.wash_ids)
+            data, _raw, _status_code, _resp_h, _req_h = await tms.fetch_units(cfg.tms_project_id, cfg.wash_ids)
 
-        text = format_washes(data, only_bad=cfg.only_bad)
         bad_present = any(is_bad_wash(w) for w in data)
-
-        # Сырые логи — только при проблемах
-        if cfg.debug_on_bad and bad_present and cfg.debug_chat_id:
-            head = json.dumps({
-                "url": f"{cfg.tms_base_url}/api/v1/project/{cfg.tms_project_id}/unit/full",
-                "status": status_code,
-                "request_headers": redact_headers(req_h),
-                "response_headers": redact_headers(resp_h),
-                "request_body": cfg.wash_ids,
-            }, ensure_ascii=False, indent=2)
-            await _send_debug(context.bot, cfg.debug_chat_id, "TMS /unit/full (bad detected)", f"{head}\n\n{raw}")
-
-        h = _hash_text(text)
-        if h != _last_hash:
-            _last_hash = h
+        if bad_present:
+            # формируем краткую сводку ТОЛЬКО по аварийным
+            text = format_washes(data, only_bad=True)
             await context.bot.send_message(chat_id=cfg.group_chat_id, text=text)
         else:
-            logger.info("No changes in summary; skip sending.")
+            logger.info("All good; no bad statuses. (no message sent)")
 
         _last_poll_ok_at = datetime.now(ZoneInfo(cfg.timezone))
 
     except Exception as e:
         logger.exception("Polling failed: %s", e)
         await context.bot.send_message(chat_id=cfg.group_chat_id, text=f"⚠️ Ошибка запроса статусов: {e}")
+
 
 # ---------------- Ежедневная «выручка» (заглушка) ----------------
 async def _send_daily_revenue_stub(context: ContextTypes.DEFAULT_TYPE):
@@ -103,6 +62,7 @@ async def _send_daily_revenue_stub(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning("Не удалось отправить ежедневное сообщение: %s", e)
 
+
 def _seconds_until_next(hour: int, minute: int, tz_name: str) -> int:
     tz = ZoneInfo(tz_name)
     now = datetime.now(tz)
@@ -112,36 +72,45 @@ def _seconds_until_next(hour: int, minute: int, tz_name: str) -> int:
         next_run += timedelta(days=1)
     return int((next_run - now).total_seconds())
 
+
 # ---------------- Команды ----------------
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await _poll_and_send(context)
+    """Ручная сводка: покажем только аварийные, а если их нет — сообщим об этом."""
+    cfg: Config = context.application.bot_data["cfg"]
+    try:
+        async with TMSClient(cfg.tms_base_url, cfg.tms_cookie) as tms:
+            data, _raw, _status_code, _resp_h, _req_h = await tms.fetch_units(cfg.tms_project_id, cfg.wash_ids)
+        bad_present = any(is_bad_wash(w) for w in data)
+        text = format_washes(data, only_bad=True) if bad_present else "✅ Аварийных моек не обнаружено."
+        await update.message.reply_text(text)
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Ошибка запроса статусов: {e}")
+
 
 async def cmd_whereami(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user = update.effective_user
     await update.message.reply_text(f"chat_id: {chat.id}\nchat_type: {chat.type}\nuser_id: {user.id if user else 'n/a'}")
 
+
 async def cmd_status_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает состояние бота и задач"""
+    """Состояние бота и задач"""
     cfg: Config = context.application.bot_data["cfg"]
     tz = ZoneInfo(cfg.timezone)
-    started_at: datetime = context.application.bot_data.get("started_at")  # установлен в main()
+    started_at: datetime = context.application.bot_data.get("started_at")
     uptime = None
     if started_at:
         uptime = datetime.now(tz) - started_at
 
-    # соберём информацию по задачам
     jobs = context.job_queue.jobs() if context.job_queue else []
     lines = []
     lines.append("🤖 Бот работает")
-    if uptime is not None:
-        # красиво человекочитаемо
+    if uptime:
         total_sec = int(uptime.total_seconds())
-        hours = total_sec // 3600
-        minutes = (total_sec % 3600) // 60
-        seconds = total_sec % 60
-        lines.append(f"⏱ Uptime: {hours:02d}:{minutes:02d}:{seconds:02d}")
-
+        h = total_sec // 3600
+        m = (total_sec % 3600) // 60
+        s = total_sec % 60
+        lines.append(f"⏱ Uptime: {h:02d}:{m:02d}:{s:02d}")
     if _last_poll_ok_at:
         lines.append(f"🕒 Последний успешный опрос: {_last_poll_ok_at.astimezone(tz).strftime('%Y-%m-%d %H:%M:%S %Z')}")
     else:
@@ -162,15 +131,16 @@ async def cmd_status_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         lines.append("🧰 Активные задачи: нет")
 
-    # основные флаги
     lines.append("")
-    lines.append(f"⚙️ ONLY_BAD={cfg.only_bad} | DEBUG_ON_BAD={cfg.debug_on_bad}")
     lines.append(f"🌐 TIMEZONE={cfg.timezone}")
     lines.append(f"📅 DAILY_REVENUE={'on' if cfg.enable_daily_revenue else 'off'} (01:00)")
     await update.message.reply_text("\n".join(lines))
 
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.exception("Unhandled error: %s", context.error)
+    err = getattr(context, "error", None)
+    logger.error("Unhandled error: %s", err)
+
 
 # ---------------- Entry point ----------------
 def main():
@@ -194,7 +164,7 @@ def main():
     if app.job_queue is None:
         raise RuntimeError("Установи extra: pip install 'python-telegram-bot[job-queue]'")
 
-    # 1) Опрос статусов: каждые 5 минут, первый запуск сразу (first=0) — БЕЗ /start
+    # 1) Опрос статусов: каждые 5 минут, первый запуск сразу (first=0)
     app.job_queue.run_repeating(
         _poll_and_send,
         interval=timedelta(minutes=5),
@@ -214,6 +184,7 @@ def main():
         logger.info("Daily revenue stub scheduled at 01:00 %s (first in %s sec)", cfg.timezone, delay)
 
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
