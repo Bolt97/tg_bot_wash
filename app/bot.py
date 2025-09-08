@@ -91,15 +91,39 @@ async def _poll_and_send(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=cfg.group_chat_id, text=f"⚠️ Ошибка запроса статусов: {e}")
 
 
-# ---------------- Ежедневная «выручка» (пока заглушка) ----------------
-async def _send_daily_revenue_stub(context: ContextTypes.DEFAULT_TYPE):
+# ---------------- Ежедневный отчёт выручки (за вчера) ----------------
+async def _send_daily_revenue_report(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Каждый день в 00:01 (локальная TZ) отправляет выручку за вчера.
+    """
     cfg: Config = context.application.bot_data["cfg"]
     chat_id = cfg.revenue_chat_id or cfg.group_chat_id
+    tz = ZoneInfo(cfg.timezone)
+
+    # вчера по локальной TZ
+    today_local = datetime.now(tz).date()
+    yesterday = today_local - timedelta(days=1)
+    date_from = yesterday.isoformat()
+    date_to = yesterday.isoformat()
+
     try:
-        now = datetime.now(ZoneInfo(cfg.timezone)).strftime("%Y-%m-%d %H:%M:%S %Z")
-        await context.bot.send_message(chat_id=chat_id, text=f"📊 Тут будет выручка за день\n({now})")
+        async with TMSClient(cfg.tms_base_url, cfg.tms_cookie) as tms:
+            data, _raw, _status, _resp_h, _req_h = await tms.fetch_transactions(
+                org_id=cfg.org_id, date_from=date_from, date_to=date_to, max_count=1500
+            )
+        resp = TransactionsResponse.model_validate(data)
+        report = aggregate_revenue(resp.items)
+        text = format_revenue_report_simple(report, date_from, date_to)
+        await context.bot.send_message(chat_id=chat_id, text=text)
     except Exception as e:
-        logger.warning("Не удалось отправить ежедневное сообщение: %s", e)
+        logger.exception("Daily revenue task failed: %s", e)
+        try:
+            await context.bot.send_message(
+                chat_id=cfg.group_chat_id,
+                text=f"⚠️ Ошибка ежедневного отчёта выручки: {e}"
+            )
+        except Exception:
+            pass
 
 
 # ---------------- Команды ----------------
@@ -162,8 +186,9 @@ async def cmd_status_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines.append("")
     lines.append(f"🌐 TIMEZONE={cfg.timezone}")
-    lines.append(f"📅 DAILY_REVENUE={'on' if cfg.enable_daily_revenue else 'off'} (01:00)")
+    lines.append(f"📅 DAILY_REVENUE={'on' if cfg.enable_daily_revenue else 'off'} (00:01)")
     await update.message.reply_text("\n".join(lines))
+
 
 async def cmd_revenue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -184,7 +209,6 @@ async def cmd_revenue(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         resp = TransactionsResponse.model_validate(data)
 
-        # ✨ Новое: сначала агрегируем, потом форматируем
         report = aggregate_revenue(resp.items)
         text = format_revenue_report_simple(report, date_from, date_to)
 
@@ -230,16 +254,16 @@ def main():
         name="poll_statuses",
     )
 
-    # 2) Ежедневная «выручка» — ближайшая 01:00 в нужной TZ, далее каждые 24 часа (пока заглушка)
+    # 2) Ежедневная «выручка за вчера» — ближайшее 00:01 в нужной TZ, далее каждые 24 часа
     if cfg.enable_daily_revenue:
-        delay = _seconds_until_next(1, 0, cfg.timezone)
+        delay = _seconds_until_next(0, 1, cfg.timezone)  # 00:01
         app.job_queue.run_repeating(
-            _send_daily_revenue_stub,
+            _send_daily_revenue_report,
             interval=24 * 60 * 60,
             first=delay,
-            name="daily_revenue_stub",
+            name="daily_revenue_report",
         )
-        logger.info("Daily revenue stub scheduled at 01:00 %s (first in %s sec)", cfg.timezone, delay)
+        logger.info("Daily revenue scheduled at 00:01 %s (first in %s sec)", cfg.timezone, delay)
 
     app.run_polling()
 
