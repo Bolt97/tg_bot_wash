@@ -1,5 +1,4 @@
 from __future__ import annotations
-import json
 import logging
 from typing import Optional
 from datetime import datetime, timedelta
@@ -10,12 +9,59 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 from app.config import Config
 from app.logging_setup import setup_logging
-from app.formatters import format_washes, is_bad_wash
+from app.formatters import format_washes, is_bad_wash, format_revenue_report_simple
 from app.services.tms_client import TMSClient
+from app.models.transactions import TransactionsResponse
 
 logger = logging.getLogger(__name__)
 
 _last_poll_ok_at: Optional[datetime] = None  # время последнего успешного опроса
+
+
+# ---------------- Вспомогательное ----------------
+def _seconds_until_next(hour: int, minute: int, tz_name: str) -> int:
+    tz = ZoneInfo(tz_name)
+    now = datetime.now(tz)
+    next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if next_run <= now:
+        from datetime import timedelta as _td
+        next_run += _td(days=1)
+    return int((next_run - now).total_seconds())
+
+
+def _parse_revenue_args(args: list[str], tz_name: str) -> tuple[str, str]:
+    """
+    Разбор аргументов команды /revenue:
+      - [] -> сегодня
+      - [YYYY-MM-DD] -> from=to=эта дата
+      - [YYYY-MM-DD YYYY-MM-DD] -> from/to
+    Возвращает (date_from, date_to) в ISO 'YYYY-MM-DD'.
+    """
+    tz = ZoneInfo(tz_name)
+    fmt = "%Y-%m-%d"
+
+    if not args:
+        d = datetime.now(tz).date()
+        return d.isoformat(), d.isoformat()
+
+    if len(args) == 1:
+        try:
+            d = datetime.strptime(args[0], fmt).date()
+        except ValueError:
+            raise ValueError("Неверная дата. Используйте формат YYYY-MM-DD, например: /revenue 2025-09-07")
+        return d.isoformat(), d.isoformat()
+
+    if len(args) == 2:
+        try:
+            d1 = datetime.strptime(args[0], fmt).date()
+            d2 = datetime.strptime(args[1], fmt).date()
+        except ValueError:
+            raise ValueError("Неверный формат дат. Используйте: /revenue 2025-09-06 2025-09-08")
+        if d2 < d1:
+            d1, d2 = d2, d1
+        return d1.isoformat(), d2.isoformat()
+
+    raise ValueError("Использование: /revenue [YYYY-MM-DD] или /revenue YYYY-MM-DD YYYY-MM-DD")
 
 
 # ---------------- Статусы ----------------
@@ -52,7 +98,7 @@ async def _poll_and_send(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=cfg.group_chat_id, text=f"⚠️ Ошибка запроса статусов: {e}")
 
 
-# ---------------- Ежедневная «выручка» (заглушка) ----------------
+# ---------------- Ежедневная «выручка» (пока заглушка) ----------------
 async def _send_daily_revenue_stub(context: ContextTypes.DEFAULT_TYPE):
     cfg: Config = context.application.bot_data["cfg"]
     chat_id = cfg.revenue_chat_id or cfg.group_chat_id
@@ -61,16 +107,6 @@ async def _send_daily_revenue_stub(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=chat_id, text=f"📊 Тут будет выручка за день\n({now})")
     except Exception as e:
         logger.warning("Не удалось отправить ежедневное сообщение: %s", e)
-
-
-def _seconds_until_next(hour: int, minute: int, tz_name: str) -> int:
-    tz = ZoneInfo(tz_name)
-    now = datetime.now(tz)
-    next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if next_run <= now:
-        from datetime import timedelta
-        next_run += timedelta(days=1)
-    return int((next_run - now).total_seconds())
 
 
 # ---------------- Команды ----------------
@@ -137,6 +173,32 @@ async def cmd_status_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines))
 
 
+async def cmd_revenue(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /revenue                      -> сегодня
+    /revenue 2025-09-07           -> конкретная дата
+    /revenue 2025-09-06 2025-09-08 -> период
+    """
+    cfg: Config = context.application.bot_data["cfg"]
+    try:
+        date_from, date_to = _parse_revenue_args(context.args or [], cfg.timezone)
+    except Exception as e:
+        await update.message.reply_text(f"❗ {e}")
+        return
+
+    try:
+        async with TMSClient(cfg.tms_base_url, cfg.tms_cookie) as tms:
+            data, _raw, _status, _resp_h, _req_h = await tms.fetch_transactions(
+                org_id=cfg.org_id, date_from=date_from, date_to=date_to, max_count=1500
+            )
+        resp = TransactionsResponse.model_validate(data)
+        text = format_revenue_report_simple(resp.items, date_from, date_to, currency="RUB")
+        await update.message.reply_text(text)
+    except Exception as e:
+        logger.exception("Revenue fetch failed: %s", e)
+        await update.message.reply_text(f"⚠️ Ошибка получения выручки: {e}")
+
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     err = getattr(context, "error", None)
     logger.error("Unhandled error: %s", err)
@@ -159,6 +221,7 @@ def main():
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("whereami", cmd_whereami))
     app.add_handler(CommandHandler("status_bot", cmd_status_bot))
+    app.add_handler(CommandHandler("revenue", cmd_revenue))
     app.add_error_handler(on_error)
 
     if app.job_queue is None:
@@ -172,7 +235,7 @@ def main():
         name="poll_statuses",
     )
 
-    # 2) Ежедневная «выручка» — ближайшая 01:00 в нужной TZ, далее каждые 24 часа
+    # 2) Ежедневная «выручка» — ближайшая 01:00 в нужной TZ, далее каждые 24 часа (пока заглушка)
     if cfg.enable_daily_revenue:
         delay = _seconds_until_next(1, 0, cfg.timezone)
         app.job_queue.run_repeating(
