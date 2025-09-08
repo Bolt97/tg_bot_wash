@@ -9,7 +9,12 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 from app.config import Config
 from app.logging_setup import setup_logging
-from app.formatters import format_washes, is_bad_wash, format_revenue_report_simple
+from app.formatters import (
+    format_washes,
+    is_bad_wash,
+    aggregate_revenue,
+    format_revenue_report_simple,
+)
 from app.services.tms_client import TMSClient
 from app.models.transactions import TransactionsResponse
 
@@ -31,37 +36,25 @@ def _seconds_until_next(hour: int, minute: int, tz_name: str) -> int:
 
 def _parse_revenue_args(args: list[str], tz_name: str) -> tuple[str, str]:
     """
-    Разбор аргументов команды /revenue:
-      - [] -> сегодня
-      - [YYYY-MM-DD] -> from=to=эта дата
-      - [YYYY-MM-DD YYYY-MM-DD] -> from/to
-    Возвращает (date_from, date_to) в ISO 'YYYY-MM-DD'.
+    /revenue                -> сегодня (по TZ)
+    /revenue ДД.ММ.ГГГГ     -> конкретная дата (from=to)
     """
     tz = ZoneInfo(tz_name)
-    fmt = "%Y-%m-%d"
 
     if not args:
         d = datetime.now(tz).date()
         return d.isoformat(), d.isoformat()
 
     if len(args) == 1:
+        # принимаем только формат ДД.ММ.ГГГГ
         try:
-            d = datetime.strptime(args[0], fmt).date()
+            d = datetime.strptime(args[0], "%d.%m.%Y").date()
         except ValueError:
-            raise ValueError("Неверная дата. Используйте формат YYYY-MM-DD, например: /revenue 2025-09-07")
+            raise ValueError("Неверная дата. Используйте формат ДД.ММ.ГГГГ, например: /revenue 09.08.2025")
         return d.isoformat(), d.isoformat()
 
-    if len(args) == 2:
-        try:
-            d1 = datetime.strptime(args[0], fmt).date()
-            d2 = datetime.strptime(args[1], fmt).date()
-        except ValueError:
-            raise ValueError("Неверный формат дат. Используйте: /revenue 2025-09-06 2025-09-08")
-        if d2 < d1:
-            d1, d2 = d2, d1
-        return d1.isoformat(), d2.isoformat()
-
-    raise ValueError("Использование: /revenue [YYYY-MM-DD] или /revenue YYYY-MM-DD YYYY-MM-DD")
+    # временно отключаем период
+    raise ValueError("Использование: /revenue или /revenue ДД.ММ.ГГГГ")
 
 
 # ---------------- Статусы ----------------
@@ -172,12 +165,10 @@ async def cmd_status_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines.append(f"📅 DAILY_REVENUE={'on' if cfg.enable_daily_revenue else 'off'} (01:00)")
     await update.message.reply_text("\n".join(lines))
 
-
 async def cmd_revenue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /revenue                      -> сегодня
-    /revenue 2025-09-07           -> конкретная дата
-    /revenue 2025-09-06 2025-09-08 -> период
+    /revenue                -> выручка за сегодня
+    /revenue ДД.ММ.ГГГГ     -> выручка за конкретную дату
     """
     cfg: Config = context.application.bot_data["cfg"]
     try:
@@ -192,7 +183,11 @@ async def cmd_revenue(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 org_id=cfg.org_id, date_from=date_from, date_to=date_to, max_count=1500
             )
         resp = TransactionsResponse.model_validate(data)
-        text = format_revenue_report_simple(resp.items, date_from, date_to, currency="RUB")
+
+        # ✨ Новое: сначала агрегируем, потом форматируем
+        report = aggregate_revenue(resp.items)
+        text = format_revenue_report_simple(report, date_from, date_to)
+
         await update.message.reply_text(text)
     except Exception as e:
         logger.exception("Revenue fetch failed: %s", e)
