@@ -1,9 +1,15 @@
 from __future__ import annotations
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# === Загружаем .env строго из корня проекта ===
+# Структура: <root>/.env и <root>/app/config.py
+ROOT_DIR = Path(__file__).resolve().parents[1]  # .. от app/
+ENV_PATH = ROOT_DIR / ".env"
+# override=True — .env перекрывает уже выставленные переменные окружения
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 
 def _as_bool(v: str | None, default: bool = False) -> bool:
@@ -13,7 +19,6 @@ def _as_bool(v: str | None, default: bool = False) -> bool:
 
 
 def _as_int(env_name: str, default: int = 0) -> int:
-    """Безопасно читаем int из .env: обрезаем пробелы, пустое -> default."""
     raw = os.getenv(env_name)
     if raw is None:
         return default
@@ -23,7 +28,6 @@ def _as_int(env_name: str, default: int = 0) -> int:
     try:
         return int(raw)
     except ValueError:
-        # Дадим явную ошибку, чтобы было видно, что в .env мусор
         raise ValueError(f"Invalid integer for {env_name}: {raw!r}")
 
 
@@ -47,7 +51,7 @@ class Config:
     tms_base_url: str
     tms_project_id: int
     wash_ids: list[int]
-    org_id: str  # org id, например "o3238"
+    org_id: str  # например "o3238"
 
     # Ежедневная выручка
     enable_daily_revenue: bool
@@ -74,20 +78,22 @@ class Config:
         tms_base_url = (os.getenv("TMS_BASE_URL") or "https://tms.termt.com").strip()
         tms_project_id = _as_int("TMS_PROJECT_ID", 29)
 
-        # список ID моек
         raw_wash_ids = os.getenv("WASH_IDS", "")
-        wash_ids = []
+        wash_ids: list[int] = []
         for x in raw_wash_ids.split(","):
             x = x.strip()
             if x.isdigit():
                 wash_ids.append(int(x))
 
-        org_id = (os.getenv("TMS_ORG_ID") or "").strip()
+        org_id = (os.getenv("TMS_ORG_ID") or "o3238").strip()
 
         # Выручка
         enable_daily_revenue = _as_bool(os.getenv("ENABLE_DAILY_REVENUE"), True)
-        timezone = (os.getenv("TIMEZONE") or "Europe/Berlin").split("#", 1)[0].strip()
-        # ВАЖНО: если REVENUE_CHAT_ID пустой/битый — используем group_chat_id
+        # уберём возможный инлайн-комментарий после TZ
+        tz_raw = (os.getenv("TIMEZONE") or "Europe/Berlin").strip()
+        timezone = tz_raw.split("#", 1)[0].strip()
+
+        # ВАЖНО: revenue_chat_id читаем надёжно; если пусто — подставим group_chat_id
         revenue_chat_id = _as_int("REVENUE_CHAT_ID", group_chat_id or 0)
 
         cfg = Config(
@@ -108,12 +114,12 @@ class Config:
             revenue_chat_id=revenue_chat_id,
         )
 
-        # Небольшая диагностика при старте — один раз в лог
+        # Диагностика конфигурации при старте
         import logging
         logger = logging.getLogger(__name__)
         logger.info(
-            "CFG: GROUP_CHAT_ID=%s, REVENUE_CHAT_ID=%s, TIMEZONE=%s, ORG=%s, WASH_IDS=%s",
-            cfg.group_chat_id, cfg.revenue_chat_id, cfg.timezone, cfg.org_id, cfg.wash_ids
+            "CFG loaded from %s | GROUP_CHAT_ID=%s, REVENUE_CHAT_ID=%s, TIMEZONE=%s, ORG=%s, WASH_IDS=%s",
+            ENV_PATH, cfg.group_chat_id, cfg.revenue_chat_id, cfg.timezone, cfg.org_id, cfg.wash_ids
         )
 
         return cfg
