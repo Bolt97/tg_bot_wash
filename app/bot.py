@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 from app.config import Config
 from app.logging_setup import setup_logging
@@ -82,10 +82,10 @@ async def _poll_and_send(context: ContextTypes.DEFAULT_TYPE):
             # формируем краткую сводку ТОЛЬКО по аварийным
             text = format_washes(data, only_bad=True)
             await context.bot.send_message(
-                    chat_id=cfg.group_chat_id,
-                    text=text,
-                    parse_mode=ParseMode.HTML,   # <-- вот это
-                    disable_web_page_preview=True
+                chat_id=cfg.group_chat_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
             )
         else:
             logger.info("All good; no bad statuses. (no message sent)")
@@ -101,9 +101,14 @@ async def _poll_and_send(context: ContextTypes.DEFAULT_TYPE):
 async def _send_daily_revenue_report(context: ContextTypes.DEFAULT_TYPE):
     """
     Каждый день в 00:01 (локальная TZ) отправляет выручку за вчера.
+    Уходит ТОЛЬКО в REVENUE_CHAT_ID. Если не задан — пропускаем.
     """
     cfg: Config = context.application.bot_data["cfg"]
-    chat_id = cfg.revenue_chat_id or cfg.group_chat_id
+    if not cfg.revenue_chat_id:
+        logger.warning("REVENUE_CHAT_ID не задан — ежедневный отчёт пропущен.")
+        return
+
+    chat_id = cfg.revenue_chat_id
     tz = ZoneInfo(cfg.timezone)
 
     # вчера по локальной TZ
@@ -123,11 +128,13 @@ async def _send_daily_revenue_report(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=chat_id, text=text)
     except Exception as e:
         logger.exception("Daily revenue task failed: %s", e)
+        # уведомим основной чат о проблеме, если он есть
         try:
-            await context.bot.send_message(
-                chat_id=cfg.group_chat_id,
-                text=f"⚠️ Ошибка ежедневного отчёта выручки: {e}"
-            )
+            if cfg.group_chat_id:
+                await context.bot.send_message(
+                    chat_id=cfg.group_chat_id,
+                    text=f"⚠️ Ошибка ежедневного отчёта выручки: {e}"
+                )
         except Exception:
             pass
 
@@ -142,9 +149,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bad_present = any(is_bad_wash(w) for w in data)
         text = format_washes(data, only_bad=True) if bad_present else "✅ Аварийных моек не обнаружено."
         await update.message.reply_text(
-               text,
-    parse_mode=ParseMode.HTML,       # <-- и здесь
-    disable_web_page_preview=True,
+            text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
         )
     except Exception as e:
         await update.message.reply_text(f"⚠️ Ошибка запроса статусов: {e}")
@@ -196,7 +203,7 @@ async def cmd_status_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines.append("")
     lines.append(f"🌐 TIMEZONE={cfg.timezone}")
-    lines.append(f"📅 DAILY_REVENUE={'on' if cfg.enable_daily_revenue else 'off'} (00:01)")
+    lines.append(f"📅 DAILY_REVENUE={'on' if cfg.enable_daily_revenue else 'off'} (00:01) → chat {cfg.revenue_chat_id or '-'}")
     await update.message.reply_text("\n".join(lines))
 
 
@@ -204,12 +211,20 @@ async def cmd_revenue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /revenue                -> выручка за сегодня
     /revenue ДД.ММ.ГГГГ     -> выручка за конкретную дату
+    Команда работает ТОЛЬКО в REVENUE_CHAT_ID.
     """
     cfg: Config = context.application.bot_data["cfg"]
+
+    # Разрешаем команду только в revenue-чате. В остальных — тихо игнорируем.
+    if cfg.revenue_chat_id and update.effective_chat.id != cfg.revenue_chat_id:
+        return
+
     try:
         date_from, date_to = _parse_revenue_args(context.args or [], cfg.timezone)
     except Exception as e:
-        await update.message.reply_text(f"❗ {e}")
+        # Отвечаем только если это разрешённый чат
+        if update.effective_chat.id == cfg.revenue_chat_id:
+            await update.message.reply_text(f"❗ {e}")
         return
 
     try:
