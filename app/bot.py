@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.constants import ParseMode
 
 from app.config import Config
 from app.logging_setup import setup_logging
@@ -80,7 +81,12 @@ async def _poll_and_send(context: ContextTypes.DEFAULT_TYPE):
         if bad_present:
             # формируем краткую сводку ТОЛЬКО по аварийным
             text = format_washes(data, only_bad=True)
-            await context.bot.send_message(chat_id=cfg.group_chat_id, text=text)
+            await context.bot.send_message(
+                    chat_id=cfg.group_chat_id,
+                    text=text,
+                    parse_mode=ParseMode.HTML,   # <-- вот это
+                    disable_web_page_preview=True
+            )
         else:
             logger.info("All good; no bad statuses. (no message sent)")
 
@@ -135,7 +141,11 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data, _raw, _status_code, _resp_h, _req_h = await tms.fetch_units(cfg.tms_project_id, cfg.wash_ids)
         bad_present = any(is_bad_wash(w) for w in data)
         text = format_washes(data, only_bad=True) if bad_present else "✅ Аварийных моек не обнаружено."
-        await update.message.reply_text(text)
+        await update.message.reply_text(
+               text,
+    parse_mode=ParseMode.HTML,       # <-- и здесь
+    disable_web_page_preview=True,
+        )
     except Exception as e:
         await update.message.reply_text(f"⚠️ Ошибка запроса статусов: {e}")
 
