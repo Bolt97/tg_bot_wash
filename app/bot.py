@@ -101,14 +101,24 @@ async def _poll_and_send(context: ContextTypes.DEFAULT_TYPE):
 async def _send_daily_revenue_report(context: ContextTypes.DEFAULT_TYPE):
     """
     Каждый день в 00:01 (локальная TZ) отправляет выручку за вчера.
-    Уходит ТОЛЬКО в REVENUE_CHAT_ID. Если не задан — пропускаем.
+    Уходит ТОЛЬКО в REVENUE_CHAT_ID (если задан), иначе в GROUP_CHAT_ID.
     """
     cfg: Config = context.application.bot_data["cfg"]
-    if not cfg.revenue_chat_id:
-        logger.warning("REVENUE_CHAT_ID не задан — ежедневный отчёт пропущен.")
+
+    # Приоритет: job.data.chat_id -> REVENUE_CHAT_ID -> GROUP_CHAT_ID
+    chat_id = None
+    try:
+        if context.job and context.job.data:
+            chat_id = context.job.data.get("chat_id")
+    except Exception:
+        chat_id = None
+    if not chat_id:
+        chat_id = cfg.revenue_chat_id or cfg.group_chat_id
+
+    if not chat_id:
+        logger.warning("Нет chat_id для ежедневного отчёта — пропуск.")
         return
 
-    chat_id = cfg.revenue_chat_id
     tz = ZoneInfo(cfg.timezone)
 
     # вчера по локальной TZ
@@ -287,6 +297,7 @@ def main():
             interval=24 * 60 * 60,
             first=delay,
             name="daily_revenue_report",
+            data={"chat_id": cfg.revenue_chat_id or cfg.group_chat_id},
         )
         logger.info("Daily revenue scheduled at 00:01 %s (first in %s sec)", cfg.timezone, delay)
 
