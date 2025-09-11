@@ -133,10 +133,11 @@ def format_washes(washes: List[Dict[str, Any]], only_bad: bool = False) -> str:
                 unique.append(p)
 
         for mod_name, st, text in unique:
+            st_norm = _norm_status(st)
             if text:
-                lines.append(f"• {mod_name}: {st} — {text}")
+                lines.append(f"• <b>{mod_name}</b>: <code>{st_norm}</code> — {text}")
             else:
-                lines.append(f"• {mod_name}: {st}")
+                lines.append(f"• <b>{mod_name}</b>: <code>{st_norm}</code>")
 
     if only_bad:
         if not lines:
