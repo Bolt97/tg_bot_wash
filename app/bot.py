@@ -274,7 +274,7 @@ def main():
     # 1) Опрос статусов: каждые 5 минут, первый запуск сразу (first=0)
     app.job_queue.run_repeating(
         _poll_and_send,
-        interval=timedelta(minutes=5),
+        interval=timedelta(minutes=1),
         first=0,
         name="poll_statuses",
     )
