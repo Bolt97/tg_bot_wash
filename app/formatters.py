@@ -36,6 +36,16 @@ def _worst(a: str, b: str) -> str:
     return a if SEVERITY_RANK.get(a, 0) >= SEVERITY_RANK.get(b, 0) else b
 
 
+def _is_ignorable_warning(status: str | None, text: str | None) -> bool:
+    """
+    Игнорируем предупреждения вида: status == 'warning' и text == 'connection failed'
+    (без учёта регистра/пробелов).
+    """
+    st = _norm_status(status)
+    tx = (text or "").strip().lower()
+    return st == "warning" and tx == "connection failed"
+
+
 def _collect_problem_modules(mods: List[Dict[str, Any]] | None, out: List[Tuple[str, str, str | None]]) -> None:
     """
     Рекурсивно собираем проблемные модули: (display_name, status, text)
@@ -55,22 +65,35 @@ def _collect_problem_modules(mods: List[Dict[str, Any]] | None, out: List[Tuple[
 def is_bad_wash(wash: Dict[str, Any]) -> bool:
     """
     Проблемной считаем мойку, если:
-    - status.type ∈ PROBLEM_STATUSES
-    - или status.online_type ∈ PROBLEM_STATUSES
-    - или есть модуль с любым статусом != ok (в wash['modules'] или wash['status']['modules'])
+    - после фильтрации остались проблемные модули (не ok, при этом НЕ warning 'connection failed'), или
+    - есть error на верхнем уровне (status.type == error или online_type == error).
+    Предупреждения warning 'connection failed' игнорируем.
     """
-    st = _norm_status((wash.get("status") or {}).get("type"))
-    if st in PROBLEM_STATUSES:
-        return True
+    status = (wash.get("status") or {})
 
-    online_st = _norm_status((wash.get("status") or {}).get("online_type"))
-    if online_st in PROBLEM_STATUSES:
-        return True
-
+    # Соберём все модульные проблемы
     problems: List[Tuple[str, str, str | None]] = []
     _collect_problem_modules(wash.get("modules"), problems)
-    _collect_problem_modules((wash.get("status") or {}).get("modules"), problems)
-    return len(problems) > 0
+    _collect_problem_modules(status.get("modules"), problems)
+
+    # Отфильтруем игнорируемые warning
+    problems = [
+        (name, st, text)
+        for (name, st, text) in problems
+        if not _is_ignorable_warning(st, text)
+    ]
+
+    if problems:
+        return True
+
+    # Если модулей-проблем нет, но верхний уровень — явный error
+    top = _norm_status(status.get("type"))
+    online = _norm_status(status.get("online_type"))
+    if top == "error" or online == "error":
+        return True
+
+    # Остальное считаем «не проблемой» для отправки (в т.ч. warning без модульных деталей)
+    return False
 
 
 def _worst_status_for_wash(wash: Dict[str, Any]) -> str:
@@ -103,7 +126,8 @@ def format_washes(washes: List[Dict[str, Any]], only_bad: bool = False) -> str:
     """
     Сводка статусов по списку моек.
     Если only_bad=True — выводим только проблемные.
-    Для каждой проблемной мойки добавляем строки по модульным проблемам.
+    Для каждой проблемной мойки добавляем строки по модульным проблемам
+    (игнорируя warning 'connection failed').
     """
     lines: List[str] = []
     for w in washes:
@@ -132,8 +156,11 @@ def format_washes(washes: List[Dict[str, Any]], only_bad: bool = False) -> str:
                 seen.add(key)
                 unique.append(p)
 
+        # выводим, пропуская игнорируемые warning
         for mod_name, st, text in unique:
             st_norm = _norm_status(st)
+            if _is_ignorable_warning(st_norm, text):
+                continue
             if text:
                 lines.append(f"• <b>{mod_name}</b>: <code>{st_norm}</code> — {text}")
             else:
