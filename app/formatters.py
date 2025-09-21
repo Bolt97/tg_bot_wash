@@ -176,6 +176,35 @@ def format_washes(washes: List[Dict[str, Any]], only_bad: bool = False) -> str:
     return f"{header}\n\n" + "\n".join(lines)
 
 
+# --- Публичные хелперы для бота (для уведомлений о восстановлении/изменении) ---
+
+def worst_status_for_wash_public(wash: Dict[str, Any]) -> str:
+    """Публичная обёртка над _worst_status_for_wash."""
+    return _worst_status_for_wash(wash)
+
+
+def problem_modules_filtered_public(wash: Dict[str, Any]) -> List[Tuple[str, str, str | None]]:
+    """
+    Вернёт список проблемных модулей с учётом фильтра (без warning 'connection failed'),
+    уже без дублей и с нормализацией статусов.
+    """
+    problems: List[Tuple[str, str, str | None]] = []
+    _collect_problem_modules(wash.get("modules"), problems)
+    _collect_problem_modules((wash.get("status") or {}).get("modules"), problems)
+
+    # dedup + фильтр
+    seen = set()
+    uniq: List[Tuple[str, str, str | None]] = []
+    for name, st, text in problems:
+        if _is_ignorable_warning(st, text):
+            continue
+        key = (name, _norm_status(st), (text or "").strip())
+        if key not in seen:
+            seen.add(key)
+            uniq.append((name, _norm_status(st), (text or "").strip()))
+    return uniq
+
+
 # ================================
 #     ВЫРУЧКА (агрегация)
 # ================================

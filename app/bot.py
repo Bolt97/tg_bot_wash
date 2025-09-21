@@ -15,6 +15,8 @@ from app.formatters import (
     is_bad_wash,
     aggregate_revenue,
     format_revenue_report_simple,
+    worst_status_for_wash_public,
+    problem_modules_filtered_public,
 )
 from app.services.tms_client import TMSClient
 from app.models.transactions import TransactionsResponse
@@ -22,6 +24,7 @@ from app.models.transactions import TransactionsResponse
 logger = logging.getLogger(__name__)
 
 _last_poll_ok_at: Optional[datetime] = None  # время последнего успешного опроса
+_prev_bad: dict[int, str] = {}               # unit_id -> fingerprint проблемного состояния
 
 
 # ---------------- Вспомогательное ----------------
@@ -58,10 +61,27 @@ def _parse_revenue_args(args: list[str], tz_name: str) -> tuple[str, str]:
     raise ValueError("Использование: /revenue или /revenue ДД.ММ.ГГГГ")
 
 
+def _fingerprint(w: dict) -> str:
+    """
+    Строка-«отпечаток» проблемного состояния мойки:
+    включает худший статус и список проблемных модулей (с учётом фильтров).
+    """
+    worst = worst_status_for_wash_public(w)
+    mods = problem_modules_filtered_public(w)
+    parts = [f"worst={worst}"]
+    for name, st, text in mods:
+        if text:
+            parts.append(f"{name}:{st}:{text}")
+        else:
+            parts.append(f"{name}:{st}")
+    return "|".join(parts)
+
+
 # ---------------- Статусы ----------------
 async def _poll_and_send(context: ContextTypes.DEFAULT_TYPE):
-    """Опрос статусов. Сообщение в чат — только если есть проблемные мойки."""
-    global _last_poll_ok_at
+    """Опрос статусов. Сообщение в чат — только если есть проблемные мойки.
+       Плюс уведомления о восстановлении/изменении состояния."""
+    global _last_poll_ok_at, _prev_bad
     cfg: Config = context.application.bot_data["cfg"]
 
     logger.info("Polling statuses...")
@@ -77,9 +97,23 @@ async def _poll_and_send(context: ContextTypes.DEFAULT_TYPE):
         async with TMSClient(cfg.tms_base_url, cfg.tms_cookie) as tms:
             data, _raw, _status_code, _resp_h, _req_h = await tms.fetch_units(cfg.tms_project_id, cfg.wash_ids)
 
-        bad_present = any(is_bad_wash(w) for w in data)
-        if bad_present:
-            # формируем краткую сводку ТОЛЬКО по аварийным
+        # Текущее проблемное состояние
+        current_bad: dict[int, str] = {}
+        id2name: dict[int, str] = {}
+
+        for w in data:
+            unit_id = w.get("id") or w.get("unit_id")
+            if not unit_id:
+                continue
+            name = w.get("location_name") or w.get("location") or w.get("address") or f"ID {unit_id}"
+            id2name[unit_id] = name
+
+            if is_bad_wash(w):
+                current_bad[unit_id] = _fingerprint(w)
+
+        # 1) Сообщение о текущих проблемах (как раньше)
+        if current_bad:
+            # формируем сводку только по проблемным
             text = format_washes(data, only_bad=True)
             await context.bot.send_message(
                 chat_id=cfg.group_chat_id,
@@ -88,7 +122,38 @@ async def _poll_and_send(context: ContextTypes.DEFAULT_TYPE):
                 disable_web_page_preview=True,
             )
         else:
-            logger.info("All good; no bad statuses. (no message sent)")
+            logger.info("All good; no bad statuses now.")
+
+        # 2) Сообщение о восстановлении: те, кто был bad, но теперь не в current_bad
+        recovered_ids = [i for i in _prev_bad.keys() if i not in current_bad]
+        if recovered_ids:
+            lines = ["✅ Восстановились:"]
+            for uid in recovered_ids:
+                nm = id2name.get(uid, f"ID {uid}")
+                lines.append(f"• {nm} (id {uid}) — теперь OK")
+            await context.bot.send_message(
+                chat_id=cfg.group_chat_id,
+                text="\n".join(lines),
+                disable_web_page_preview=True,
+            )
+
+        # (опционально) 3) Изменение проблемного состояния (эскалация/другая ошибка)
+        changed = []
+        for uid, fp in current_bad.items():
+            old_fp = _prev_bad.get(uid)
+            if old_fp and old_fp != fp:
+                nm = id2name.get(uid, f"ID {uid}")
+                changed.append(f"• {nm} (id {uid}) — состояние обновлено")
+
+        if changed:
+            await context.bot.send_message(
+                chat_id=cfg.group_chat_id,
+                text="♻️ Обновление проблемных состояний:\n" + "\n".join(changed),
+                disable_web_page_preview=True,
+            )
+
+        # Обновляем «прошлое» состояние
+        _prev_bad = current_bad
 
         _last_poll_ok_at = datetime.now(ZoneInfo(cfg.timezone))
 
