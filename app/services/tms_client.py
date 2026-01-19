@@ -46,14 +46,13 @@ class TMSClient:
 
     async def sign_in(self) -> str:
         """
-        GET /api/v1/sign-in с JSON body.
+        POST /api/v1/sign-in с JSON body.
         Возвращает новый cookie value.
         """
         assert self._http is not None
         url = f"{self.base_url}/api/v1/sign-in"
-        headers = {"Content-Type": "text/plain"}
-        payload = json.dumps({"email": self._email, "password": self._password})
-        resp = await self._http.request("GET", url, headers=headers, content=payload)
+        payload = {"email": self._email, "password": self._password}
+        resp = await self._http.post(url, json=payload)
         logger.info("TMS sign-in %s -> %s", url, resp.status_code)
         resp.raise_for_status()
         # Извлечь cookie из response
