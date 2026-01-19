@@ -20,6 +20,7 @@ from app.formatters import (
 )
 from app.services.tms_client import TMSClient
 from app.models.transactions import TransactionsResponse
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +166,12 @@ async def _poll_and_send(context: ContextTypes.DEFAULT_TYPE):
 
         _last_poll_ok_at = datetime.now(ZoneInfo(cfg.timezone))
 
+    except (httpx.ConnectTimeout, httpx.ConnectError) as e:
+        logger.exception("Polling failed (connection): %s", e)
+        await context.bot.send_message(
+            chat_id=cfg.group_chat_id,
+            text="🔌 Сервер TMS не отвечает, нет возможности показать статусы"
+        )
     except Exception as e:
         logger.exception("Polling failed: %s", e)
         await context.bot.send_message(chat_id=cfg.group_chat_id, text=f"⚠️ Ошибка запроса статусов: {e}")
@@ -217,9 +224,18 @@ async def _send_daily_revenue_report(context: ContextTypes.DEFAULT_TYPE):
         report = aggregate_revenue(resp.items)
         text = format_revenue_report_simple(report, date_from, date_to)
         await context.bot.send_message(chat_id=chat_id, text=text)
+    except (httpx.ConnectTimeout, httpx.ConnectError) as e:
+        logger.exception("Daily revenue task failed (connection): %s", e)
+        try:
+            if cfg.group_chat_id:
+                await context.bot.send_message(
+                    chat_id=cfg.group_chat_id,
+                    text="🔌 Сервер TMS не отвечает, ежедневный отчёт выручки недоступен"
+                )
+        except Exception:
+            pass
     except Exception as e:
         logger.exception("Daily revenue task failed: %s", e)
-        # уведомим основной чат о проблеме, если он есть
         try:
             if cfg.group_chat_id:
                 await context.bot.send_message(
@@ -248,6 +264,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
+    except (httpx.ConnectTimeout, httpx.ConnectError):
+        await update.message.reply_text("🔌 Сервер TMS не отвечает, нет возможности показать статусы")
     except Exception as e:
         await update.message.reply_text(f"⚠️ Ошибка запроса статусов: {e}")
 
@@ -337,6 +355,8 @@ async def cmd_revenue(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = format_revenue_report_simple(report, date_from, date_to)
 
         await update.message.reply_text(text)
+    except (httpx.ConnectTimeout, httpx.ConnectError):
+        await update.message.reply_text("🔌 Сервер TMS не отвечает, нет возможности получить выручку")
     except Exception as e:
         logger.exception("Revenue fetch failed: %s", e)
         await update.message.reply_text(f"⚠️ Ошибка получения выручки: {e}")
