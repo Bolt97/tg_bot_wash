@@ -89,12 +89,20 @@ async def _poll_and_send(context: ContextTypes.DEFAULT_TYPE):
     if not cfg.wash_ids:
         await context.bot.send_message(chat_id=cfg.group_chat_id, text="⚠️ Не задан список WASH_IDS.")
         return
-    if not cfg.tms_cookie:
-        await context.bot.send_message(chat_id=cfg.group_chat_id, text="⚠️ Не задан TMS_COOKIE.")
+    if not cfg.tms_email or not cfg.tms_password:
+        await context.bot.send_message(chat_id=cfg.group_chat_id, text="⚠️ Не заданы TMS_EMAIL/TMS_PASSWORD.")
         return
 
+    async def _notify_token_refresh(message: str):
+        await context.bot.send_message(chat_id=cfg.group_chat_id, text=f"🔑 {message}")
+
     try:
-        async with TMSClient(cfg.tms_base_url, cfg.tms_cookie) as tms:
+        async with TMSClient(
+            cfg.tms_base_url,
+            email=cfg.tms_email,
+            password=cfg.tms_password,
+            on_token_refresh=_notify_token_refresh,
+        ) as tms:
             data, _raw, _status_code, _resp_h, _req_h = await tms.fetch_units(cfg.tms_project_id, cfg.wash_ids)
 
         # Текущее проблемное состояние
@@ -192,8 +200,16 @@ async def _send_daily_revenue_report(context: ContextTypes.DEFAULT_TYPE):
     date_from = yesterday.isoformat()
     date_to = yesterday.isoformat()
 
+    async def _notify_token_refresh(message: str):
+        await context.bot.send_message(chat_id=cfg.group_chat_id, text=f"🔑 {message}")
+
     try:
-        async with TMSClient(cfg.tms_base_url, cfg.tms_cookie) as tms:
+        async with TMSClient(
+            cfg.tms_base_url,
+            email=cfg.tms_email,
+            password=cfg.tms_password,
+            on_token_refresh=_notify_token_refresh,
+        ) as tms:
             data, _raw, _status, _resp_h, _req_h = await tms.fetch_transactions(
                 org_id=cfg.org_id, date_from=date_from, date_to=date_to, max_count=1500
             )
@@ -219,7 +235,11 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Ручная сводка: покажем только аварийные, а если их нет — сообщим об этом."""
     cfg: Config = context.application.bot_data["cfg"]
     try:
-        async with TMSClient(cfg.tms_base_url, cfg.tms_cookie) as tms:
+        async with TMSClient(
+            cfg.tms_base_url,
+            email=cfg.tms_email,
+            password=cfg.tms_password,
+        ) as tms:
             data, _raw, _status_code, _resp_h, _req_h = await tms.fetch_units(cfg.tms_project_id, cfg.wash_ids)
         bad_present = any(is_bad_wash(w) for w in data)
         text = format_washes(data, only_bad=True) if bad_present else "✅ Аварийных моек не обнаружено."
@@ -303,7 +323,11 @@ async def cmd_revenue(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        async with TMSClient(cfg.tms_base_url, cfg.tms_cookie) as tms:
+        async with TMSClient(
+            cfg.tms_base_url,
+            email=cfg.tms_email,
+            password=cfg.tms_password,
+        ) as tms:
             data, _raw, _status, _resp_h, _req_h = await tms.fetch_transactions(
                 org_id=cfg.org_id, date_from=date_from, date_to=date_to, max_count=1500
             )

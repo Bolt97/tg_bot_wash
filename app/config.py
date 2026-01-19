@@ -47,7 +47,8 @@ class Config:
     log_file_path: str
 
     # TMS
-    tms_cookie: str
+    tms_email: str
+    tms_password: str
     tms_base_url: str
     tms_project_id: int
     wash_ids: list[int]
@@ -74,7 +75,8 @@ class Config:
         log_file_path = (os.getenv("LOG_FILE_PATH") or "bot_api.log").strip()
 
         # TMS
-        tms_cookie = (os.getenv("TMS_COOKIE") or "").strip()
+        tms_email = (os.getenv("TMS_EMAIL") or "").strip()
+        tms_password = (os.getenv("TMS_PASSWORD") or "").strip()
         tms_base_url = (os.getenv("TMS_BASE_URL") or "https://tms.termt.com").strip()
         tms_project_id = _as_int("TMS_PROJECT_ID", 29)
 
@@ -104,7 +106,8 @@ class Config:
             debug_on_bad=debug_on_bad,
             log_to_file=log_to_file,
             log_file_path=log_file_path,
-            tms_cookie=tms_cookie,
+            tms_email=tms_email,
+            tms_password=tms_password,
             tms_base_url=tms_base_url,
             tms_project_id=tms_project_id,
             wash_ids=wash_ids,
