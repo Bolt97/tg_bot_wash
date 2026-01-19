@@ -6,6 +6,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# Глобальный кеш токена (сохраняется между вызовами TMSClient)
+_cached_token: str = ""
+
 
 class TMSClient:
     """Лёгкий async-клиент к TMS API с автообновлением токена."""
@@ -28,21 +31,22 @@ class TMSClient:
         self._http: httpx.AsyncClient | None = None
 
     async def __aenter__(self):
+        global _cached_token
         self._http = httpx.AsyncClient(timeout=self.timeout)
-        # Получаем токен при старте
-        await self._ensure_token()
+        # Используем кешированный токен, если есть
+        if _cached_token:
+            self.cookie_value = _cached_token
+            logger.info("TMS token loaded from cache")
+        else:
+            self.cookie_value = await self.sign_in()
+            _cached_token = self.cookie_value
+            logger.info("TMS token obtained via sign_in and cached")
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
         if self._http:
             await self._http.aclose()
             self._http = None
-
-    async def _ensure_token(self) -> None:
-        """Получить токен, если его ещё нет."""
-        if not self.cookie_value:
-            self.cookie_value = await self.sign_in()
-            logger.info("TMS token obtained via sign_in")
 
     async def sign_in(self) -> str:
         """
@@ -63,8 +67,10 @@ class TMSClient:
 
     async def _refresh_token(self) -> None:
         """Обновить токен и вызвать callback."""
+        global _cached_token
         logger.warning("Refreshing TMS token...")
         self.cookie_value = await self.sign_in()
+        _cached_token = self.cookie_value  # обновить глобальный кеш
         if self._on_token_refresh:
             await self._on_token_refresh("Токен TMS обновлён")
 
